@@ -36,7 +36,7 @@ const BookSchema = new mongoose.Schema({
     author: String,
     isbn: String,
     brief: String,
-    DOC: Date,
+    DOC: String,
     rating: Number,
     summary: String,
     updation: Date,
