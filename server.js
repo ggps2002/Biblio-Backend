@@ -1,55 +1,39 @@
 import express from "express";
 import bodyParser from "body-parser";
-import cors from "cors";
+import cors from 'cors';
+import pg from 'pg';
 import bcrypt from "bcrypt";
 import passport from "passport";
-import { Strategy } from "passport-local";
+import {Strategy} from "passport-local";
 import GoogleStrategy from "passport-google-oauth2";
-import session from "express-session";
+import  session  from "express-session";
 import env from "dotenv";
 import cookieParser from "cookie-parser";
 import MongoStore from "connect-mongo";
-import mongoose from "mongoose";
 
-// Load environment variables
-env.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
 const saltRounds = 10;
-const mongoURL = process.env.MONGO_URL || "mongodb://localhost:27017";
+env.config()
 
-// Connect to MongoDB
-mongoose.connect(mongoURL, { useNewUrlParser: true, useUnifiedTopology: true })
-    .then(() => console.log("MongoDB connected"))
-    .catch(err => console.log("MongoDB connection error:", err));
-
-// Define User and Book models
-const UserSchema = new mongoose.Schema({
-    username: String,
-    password: String,
-});
-
-const BookSchema = new mongoose.Schema({
-    userid: String,
-    title: String,
-    author: String,
-    isbn: String,
-    brief: String,
-    DOC: String,
-    rating: Number,
-    summary: String,
-    updation: Date,
-});
-
-const User = mongoose.model("User", UserSchema);
-const Book = mongoose.model("Book", BookSchema);
+const mongoURL = process.env.MONGO_URL || 'mongodb://localhost:27017'
 
 // Set up session middleware
 const store = MongoStore.create({
     mongoUrl: mongoURL,
     collectionName: 'sessions', // Specify the name of the collection
 });
+
+const db = new pg.Client({
+    user: process.env.PG_USER,
+    host: process.env.PG_HOST || "localhost",
+    database: process.env.PG_DATABASE,
+    password: process.env.PG_PASSWORD,
+    port: process.env.PG_PORT,
+});
+
+db.connect()
 
 app.use(session({
     store: store,
@@ -60,212 +44,254 @@ app.use(session({
         maxAge: 1000 * 60 * 20,
         secure: true,
         httpOnly: true,
-        sameSite: 'None',
+        SameSite: 'None',
     },
-}));
-
+}))
 app.use(cookieParser());
-const frontend_url = process.env.ORIGIN || 'http://localhost:5173';
-const backend_url = process.env.BACKEND_URL || 'http://localhost:5000';
+const frontend_url = process.env.ORIGIN || 'http://localhost:5173'
+const backend_url = process.env.BACKEND_URL || 'http://localhost:5000'
 app.use(cors({
-    origin: frontend_url,
+    origin: process.env.ORIGIN || 'http://localhost:5173',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
+    credentials: true
 }));
 app.use(bodyParser.json());
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.get('/auth/google', passport.authenticate("google", {
+app.get('/auth/google' ,passport.authenticate("google", {
     scope: ["profile"]
-}));
+}))
 
-app.get('/auth/google/callback', (req, res, next) => {
-    passport.authenticate('google', (err, user) => {
-        if (err) return next(err);
+app.get('/auth/google/callback', (req,res,next) => {
+    passport.authenticate('google', (err,user) => {
+        if (err) {
+            return next(err)
+        }
         req.logIn(user, (err) => {
-            if (err) return next(err);
+            if (err) {
+                return next(err)
+            }
             req.session.save(() => {
                 res.redirect(`${frontend_url}/dashboard?userID=${encodeURIComponent(user.userid)}&username=${encodeURIComponent(user.username)}`);
-            });
-        });
-    })(req, res, next);
-});
+        })
+            })
+            
+    }) (req, res, next);
+}) 
 
-// Replace PostgreSQL queries with Mongoose methods
 app.get('/bookDetails', async (req, res) => {
     try {
-        const id = req.query.id;
-        const ord = req.query.sorting;
-        let books;
-
+        const id = req.query.id
+        let books = null;
+        const ord = req.query.sorting
         switch (ord) {
             case "Recent":
-                books = await Book.find({ userid: id }).sort({ bookid: -1 });
+                books = await db.query('SELECT * FROM bookdetails WHERE userid = $1 ORDER BY bookid DESC',[id]);
                 break;
             case "Title":
-                books = await Book.find({ userid: id }).sort({ title: 1 });
+                books = await db.query('SELECT * FROM bookdetails WHERE userid = $1 ORDER BY title ASC',[id]);
                 break;
             case "Rating":
-                books = await Book.find({ userid: id }).sort({ rating: -1 });
+                books = await db.query('SELECT * FROM bookdetails WHERE userid = $1 ORDER BY rating DESC',[id]);
                 break;
             default:
-                books = await Book.find({ userid: id });
                 break;
         }
-
-        res.json({ val: books });
-    } catch (e) {
-        console.log(e);
-        res.sendStatus(500);
+        if (books && books.rows.length > 0) {
+            res.json({val: books.rows});
+        }
+    }catch(e){
+        console.log(e)
     }
-});
+})
 
-app.get('/check', (req, res) => {
+app.get('/check', (req,res) => {
+    console.log(req.session)
+    console.log(req.user);
+    console.log(req.isAuthenticated());
     if (req.isAuthenticated()) {
-        res.json({ valid: true, userID: req.user.userid, username: req.user.username });
-    } else {
-        res.json({ valid: false });
+        res.json({valid: true,userID: req.user.userid, username: req.user.username})
+    }else {
+        res.json({valid: false});
     }
-});
+})
 
-app.get('/delete', async (req, res) => {
-    const id = req.query.id;
+app.get('/delete', async (req,res) => {
+    const id  = req.query.id;
+    const userid = req.query.userid;
+    const sorting = req.query.sorting
+    console.log(id)
     try {
-        await Book.deleteOne({ _id: id });
-        res.sendStatus(200);
+        await db.query(`DELETE FROM bookdetails WHERE bookid = ${id}`);
     } catch (error) {
         console.log(error);
-        res.sendStatus(500);
     }
-});
+})
 
-app.post('/Edit', async (req, res) => {
+app.post('/Edit', async (req,res) =>  {
     const data = req.body;
     const time = new Date();
+    const sorting = data.sortingBasis;
+    console.log(data)
     try {
-        await Book.updateOne({ _id: data.bookID }, {
-            title: data.title,
-            author: data.author,
-            isbn: data.isbn,
-            brief: data.brief,
-            DOC: data.DOC,
-            rating: data.rating,
-            summary: data.summary,
-            updation: time,
-        });
-        res.redirect(`/bookDetails?id=${encodeURIComponent(data.id)}&sorting=${encodeURIComponent(data.sortingBasis)}`);
+        await db.query(`UPDATE bookdetails SET title = $1, author=$2, isbn=$3, brief=$4, DOC=$5, rating=$6, summary=$7,updation=$8 WHERE bookid = ${data.bookID}`,[data.title, data.author, data.isbn, data.brief, data.DOC, data.rating, data.summary, time])
+        res.redirect(`/bookDetails?id=${encodeURIComponent(data.id)}&sorting=${encodeURIComponent(sorting)}`)
     } catch (error) {
         console.log(error);
-        res.sendStatus(500);
     }
-});
+})
 
-app.post('/Add', async (req, res) => {
+app.post('/Add', (req,res) => {
     const data = req.body;
     const time = new Date();
+    const sorting = data.sortingBasis;
+    console.log(data)
     try {
-        const newBook = new Book({
-            userid: data.id,
-            title: data.title,
-            author: data.author,
-            isbn: data.isbn,
-            brief: data.brief,
-            DOC: data.DOC,
-            rating: data.rating,
-            summary: data.summary,
-            updation: time,
-        });
-        await newBook.save();
-        res.redirect(`/bookDetails?id=${encodeURIComponent(data.id)}&sorting=${encodeURIComponent(data.sortingBasis)}`);
+        db.query('INSERT INTO bookdetails (userid, title, author, isbn, brief, DOC, rating, summary, updation) VALUES ($1, $2, $3, $4, $5, $6, $7,$8,$9) ',[ data.id,data.title, data.author, data.isbn, data.brief, data.DOC, data.rating, data.summary,time])
+        res.redirect(`/bookDetails?id=${encodeURIComponent(data.id)}&sorting=${encodeURIComponent(sorting)}`)
     } catch (error) {
-        console.log(error);
-        res.sendStatus(500);
+        console.log(error)
     }
-});
+})
 
 app.post('/login/data', (req, res, next) => {
-    passport.authenticate('local', (err, user, info) => {
-        if (err) return next(err);
-        if (!user) return res.json({ message: info.message });
-        req.logIn(user, (err) => {
-            if (err) return next(err);
-            req.session.save(() => {
-                res.json({ message: "Authenticated", userID: user.userid, username: user.username });
-            });
-        });
+    console.log('Received login request:', req.body); // Log request body
+  
+    passport.authenticate('local', (err, user, info) =>  {
+      if (err) {
+        return next(err);
+      }
+      if (!user) {
+        return res.json({ message: info.message });
+      }
+      req.logIn(user, (err) => {
+        if (err) {
+          return next(err);
+        }
+        req.session.save(() => {
+            res.json({message: "Authenticated" ,userID: user.userid ,username:user.username})
+      })
+        
+      });
     })(req, res, next);
-});
+  });
 
 app.post('/signup/data', async (req, res) => {
     const signupData = req.body;
     const username = signupData.username;
     const password = signupData.pwd;
     try {
-        const userExists = await User.findOne({ username });
-        if (userExists) {
-            res.json({ message: "*Username already taken!!" });
-        } else {
-            const hashedPassword = await bcrypt.hash(password, saltRounds);
-            const newUser = new User({ username, password: hashedPassword });
-            await newUser.save();
-            req.logIn(newUser, (err) => {
-                if (err) console.log(err);
-                res.json({ message: "Authenticated", userID: newUser._id, username: newUser.username });
+        const checkResult = await db.query("SELECT * FROM users WHERE username = $1", [username]);
+        if (checkResult.rows.length > 0) {
+            const user = checkResult.rows[0]
+            const storedHashedPassword = user.password;
+            bcrypt.compare(password ,storedHashedPassword , (err, result) => {
+                if (err) {
+                    console.log("Error comparing passwords:", err);
+                } else {
+                    if (result) {
+                        // redirect to Dashboard
+                        req.logIn(user ,(err) => {
+                            if (err) {
+                                console.log(err);
+                            } else {
+                                res.json({message: "Authenticated" ,userID: user.userid ,username:user.username})
+                            }
+                        })
+                    } else {
+                        res.json({message: "*Username already taken!!"})
+                    }
+                }
             });
+        } else {
+            bcrypt.hash(password, saltRounds, async(err, hash) => {
+                if (err) {
+                    console.log("Error hashing password:",err);
+                } else {
+                    const result = await db.query(
+                        "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *",
+                        [username, hash]
+                    )
+                    const user  = result.rows[0];
+                    req.logIn(user, (err) => {
+                        if (err) {
+                            console.log(err)
+                        } else {
+                            res.json({message: "Authenticated" ,userID: user.userid ,username:user.username})
+                        }
+                    })
+                }
+            })
         }
     } catch (error) {
         console.log(error);
-        res.sendStatus(500);
     }
-});
-
-passport.use(new Strategy({ usernameField: 'username', passwordField: 'pwd' }, async (username, pwd, cb) => {
+})
+passport.use(new Strategy({ usernameField: 'username', passwordField: 'pwd' },async function verify(username, pwd, cb) {
     try {
-        const user = await User.findOne({ username });
-        if (user) {
-            const isMatch = await bcrypt.compare(pwd, user.password);
-            return cb(null, isMatch ? user : false, { message: "*Incorrect password!!" });
+        const result = await db.query("SELECT * FROM users WHERE username = $1",[username]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            const storedHashedPassword = user.password;
+            bcrypt.compare(pwd, storedHashedPassword, (err, result) => {
+                if (err) {
+                    cb(null,err);
+                } else {
+                    if (result) {
+                        //redirect to Dashboard
+                        return cb(null,user)
+                    } else {
+                        //incorrect password
+                        return cb(null,false,{message: "*Incorrect password!!"})
+                    }
+                }
+            });
         } else {
-            return cb(null, false, { message: "*Username not found!!" });
+            //undefined user
+            return cb(null, false, {message: "*Username not found!!"})
         }
     } catch (err) {
         return cb(err);
     }
-}));
+}))
 
 passport.use("google", new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: `${backend_url}/auth/google/callback`,
     useProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
-}, async (accessToken, refreshToken, profile, cb) => {
+} , async (accessToken, refreshToken, profile, cb) => {
     try {
-        const user = await User.findOne({ username: profile.displayName });
-        if (!user) {
-            const newUser = new User({ username: profile.displayName, password: "google" });
-            await newUser.save();
-            cb(null, newUser);
-        } else {
-            cb(null, user);
+        const result = await db.query("SELECT * FROM users WHERE username = $1",[profile.displayName])
+        if (result.rows.length === 0) {
+            const newUser = await db.query("INSERT INTO users (username, password) VALUES ($1, $2)", [profile.displayName, "google"])
+            cb(null, newUser.rows[0])
+        }
+        else {
+            cb(null, result.rows[0])
         }
     } catch (error) {
         console.log(error);
     }
-}));
+}))
 
-passport.serializeUser((user, cb) => {
-    cb(null, user);
-});
-
+passport.serializeUser((user,cb) => {
+    console.log("Serializing User:", user)
+    cb(null,user)
+})
 passport.deserializeUser(async (user, done) => {
+    console.log(user);
     try {
-        const sessionUser = await User.findById(user._id);
-        done(null, sessionUser || false);
+        const sessionUser = await db.query(`SELECT * FROM users WHERE userid=${user.userid}`)
+        if (sessionUser.rows.length > 0) {
+            done (null,sessionUser.rows[0])
+        } else {
+            done(null, false)
+        }
     } catch (error) {
-        console.log(error);
-        done(error);
+        console.log(error)
     }
 });
 
